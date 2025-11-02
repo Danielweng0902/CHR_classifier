@@ -39,36 +39,35 @@ CHR Classifier 是一個基於 OCR 的流程系統，專門用於從補習班掃
 ## 🗂 檔案結構
 
 CHR_classifier
-
-├── CHR_classifier.py # 主 OCR 流程
-
-├── debug_grid.py # 格子偵測除錯工具
-
-├── pdf2png.py # PDF 轉 PNG 工具
-
-├── preprocess_pages.py # 前處理工具
-
-├── whitelist.txt # 字元白名單
-
-├── data/ # 原始輸入的 PNG 頁面
-
-├── pdf/ # 原始輸入的 PDF 檔案
-
-└── datasets/ # 儲存輸出結果的資料夾
+├── main.py # main code
+├── config.py # all the config
+├── whitelist.py # whitelist process
+├── whitelist.txt # Character whitelist
+├── pdf2png.py # Convert PDF to PNG if needed
+├── preprocess_pages.py # Page preprocessing utility
+├── detect_grid.py # Grid detection debugger
+├── ocr.py # Optical Character Recognition and preprocess to Chinese words 
+├── report.py # output statistics
+├── data/ # folder originally put each page as .png file
+└── pdf/ # folder originally put the pages as .pdf file
+└── datasets/ to output the folders of result
 
 
 ---
 
 ## 🔧 系統需求
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
 - Python 3.8+
-- [opencv-python>=4.5.0](https://opencv.org/)
 - numpy>=1.21.0
+- [opencv-python>=4.5.0](https://opencv.org/)
+- pdf2image>=1.16.3
+- Pillow>=9.0.0
+- bayesian-optimization
 - [pytesseract>=0.3.10](https://github.com/madmaze/pytesseract)
-
-  ⚠️ **重要**：必須在本地安裝 **Tesseract OCR**，並於程式中設定正確路徑，例如：  
-
-  ```python
-  pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 ---
 
@@ -94,6 +93,7 @@ CHR_classifier
    ```
 
 5. 執行完後，查看輸出結果，切割後的手寫字跡圖片會輸出到指定資料夾。
+
     例如：
     ```
     ./CHR_classifier/{output_folder}/
