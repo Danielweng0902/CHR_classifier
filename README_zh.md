@@ -38,18 +38,31 @@ CHR Classifier 是一個基於 OCR 的流程系統，專門用於從補習班掃
 
 ## 🗂 檔案結構
 
+
 CHR_classifier
+
 ├── main.py # main code
+
 ├── config.py # all the config
+
 ├── whitelist.py # whitelist process
+
 ├── whitelist.txt # Character whitelist
+
 ├── pdf2png.py # Convert PDF to PNG if needed
+
 ├── preprocess_pages.py # Page preprocessing utility
+
 ├── detect_grid.py # Grid detection debugger
+
 ├── ocr.py # Optical Character Recognition and preprocess to Chinese words 
+
 ├── report.py # output statistics
+
 ├── data/ # folder originally put each page as .png file
+
 └── pdf/ # folder originally put the pages as .pdf file
+
 └── datasets/ to output the folders of result
 
 

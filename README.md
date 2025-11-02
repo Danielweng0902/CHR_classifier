@@ -33,17 +33,29 @@ If you want to use this project, please prepare your **own scanned worksheets or
 ## 🗂 File Structure
 
 CHR_classifier
+
 ├── main.py # main code
+
 ├── config.py # all the config
+
 ├── whitelist.py # whitelist process
+
 ├── whitelist.txt # Character whitelist
+
 ├── pdf2png.py # Convert PDF to PNG if needed
+
 ├── preprocess_pages.py # Page preprocessing utility
+
 ├── detect_grid.py # Grid detection debugger
+
 ├── ocr.py # Optical Character Recognition and preprocess to Chinese words 
+
 ├── report.py # output statistics
+
 ├── data/ # folder originally put each page as .png file
+
 └── pdf/ # folder originally put the pages as .pdf file
+
 └── datasets/ to output the folders of result
 
 
