@@ -1,5 +1,5 @@
 ﻿# ================================================================
-# ocr.py — OCR 與空白檢測模組 (含隨機抽樣統計模式)
+# ocr.py — OCR 與空白檢測模組（修正版：強化白名單識字 + 放寬空白門檻）
 # ================================================================
 
 import cv2
@@ -9,39 +9,63 @@ import os
 import random
 import argparse
 import matplotlib.pyplot as plt
+import unicodedata
 from config import DATA_DIR, TARGET_NAME, TESSERACT_CMD
 
 pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
 
 # ------------------------------------------------
-# OCR 前處理：ROI 增強
+# OCR 前處理：ROI 增強（強化版）
 # ------------------------------------------------
-def prepare_roi_for_ocr(full_img, box):
+def prepare_roi_for_ocr(full_img, box, enlarge=1.5):
+    """
+    ROI 增強：
+      1. 內縮邊框去除格線。
+      2. 放大影像提升辨識。
+      3. 加強對比與反相處理。
+    """
     x, y, w, h = box
     roi = full_img[y:y+h, x:x+w]
-    m = int(min(h, w) * 0.12)
+
+    # === Step1: 內縮 10~15% 去格線 ===
+    m = int(min(h, w) * 0.15)
     if m > 0 and h > 2*m and w > 2*m:
         roi = roi[m:h-m, m:w-m]
 
-    g = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    g = cv2.bilateralFilter(g, 9, 50, 50)
+    # === Step2: 放大提升辨識效果 ===
+    roi = cv2.resize(roi, None, fx=enlarge, fy=enlarge, interpolation=cv2.INTER_CUBIC)
 
+    # === Step3: 灰階 + CLAHE 對比強化 ===
+    g = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    g = cv2.bilateralFilter(g, 7, 50, 50)
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
     g = clahe.apply(g)
 
+    # === Step4: 三種不同二值化版本 ===
     _, b1 = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     b2 = cv2.adaptiveThreshold(g, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
                                cv2.THRESH_BINARY, 27, 10)
     b3 = cv2.adaptiveThreshold(g, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                                cv2.THRESH_BINARY, 27, 10)
+
+    # === Step5: 若圖像太暗則反相處理 ===
+    mean_val = np.mean(g)
+    if mean_val < 110:
+        b1, b2, b3 = [cv2.bitwise_not(x) for x in (b1, b2, b3)]
+
     return [b1, b2, b3]
 
 
 # ------------------------------------------------
-# 單格 OCR：取多版本最佳字元與信心度
+# 單格 OCR：多版本取最佳字元與信心度
 # ------------------------------------------------
 def ocr_char_and_conf(img_bin):
+    """
+    多版本容錯 OCR 函式：
+    - 自動處理 pytesseract 輸出中混有 int/str 類型的 conf。
+    - 嘗試三種二值化版本取最高信心結果。
+    """
     cfg = "--oem 3 --psm 8"
     candidates = []
 
@@ -53,13 +77,32 @@ def ocr_char_and_conf(img_bin):
             data = pytesseract.image_to_data(
                 img, lang='chi_tra', config=cfg, output_type=pytesseract.Output.DICT
             )
-            confs = [int(c) for i, c in enumerate(data['conf'])
-                     if int(c) > -1 and data['text'][i].strip()]
-            text = "".join(t for t in data['text'] if t.strip())
-            char = "".join(c for c in text if '\u4e00' <= c <= '\u9fff')
+
+            # --- 安全轉換 conf ---
+            confs = []
+            texts = []
+            for i in range(len(data['text'])):
+                text = str(data['text'][i]).strip()
+                c = data['conf'][i]
+                # 容錯轉換：可能是 str、float 或 int
+                try:
+                    c_val = float(c)
+                except (ValueError, TypeError):
+                    c_val = -1
+                if c_val > -1 and text:
+                    confs.append(c_val)
+                    texts.append(text)
+
+            if not texts:
+                continue
+
+            text_joined = "".join(texts)
+            # 僅保留中文字（\u4e00-\u9fff）
+            char = "".join(c for c in text_joined if '\u4e00' <= c <= '\u9fff')
             final_char = char[0] if char else ""
             mean_conf = float(np.mean(confs)) if confs else 0.0
             candidates.append((final_char, mean_conf))
+
         except Exception as e:
             print(f"⚠️ OCR 錯誤: {e}")
             continue
@@ -69,8 +112,9 @@ def ocr_char_and_conf(img_bin):
     return max(candidates, key=lambda x: x[1])
 
 
+
 # ------------------------------------------------
-# 空白檢測輔助函式
+# 空白檢測輔助函式（同原版）
 # ------------------------------------------------
 def _persistence_mask(gray, ksizes=(25, 41), min_keep=2):
     _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
@@ -110,13 +154,21 @@ def _stroke_stats(gray):
     return edge_density, n_cc, max_cc_area_ratio
 
 
+# ------------------------------------------------
+# 空白偵測（放寬版）
+# ------------------------------------------------
 def is_grid_blank_dynamically(gray,
-                              std_thresh=25,
-                              union_ink_ratio_min=0.020,
-                              persistence_min=0.60,
-                              edge_density_min=0.010,
+                              std_thresh=18,                # 原25 → 放寬
+                              union_ink_ratio_min=0.010,    # 原0.02 → 放寬
+                              persistence_min=0.50,          # 原0.6 → 放寬
+                              edge_density_min=0.006,        # 原0.01 → 放寬
                               n_cc_min=1,
-                              max_cc_area_ratio_min=0.004):
+                              max_cc_area_ratio_min=0.003):  # 原0.004 → 放寬
+    """
+    動態空白偵測（放寬版）：
+      - 降低筆畫密度門檻，避免淡字被當空白。
+      - 仍保留多特徵組合。
+    """
     if gray is None or gray.size == 0:
         return True
     if np.std(gray) < std_thresh:
@@ -135,7 +187,7 @@ def is_grid_blank_dynamically(gray,
 # ================================================================
 # 單檔 / 批次測試模式
 # ================================================================
-def run_single_sample(target_dir):
+def run_single_sample(target_dir, whitelist=None):
     """隨機抽樣一張 PNG 並顯示 OCR 結果"""
     pngs = [f for f in os.listdir(target_dir) if f.lower().endswith('.png')]
     if not pngs:
@@ -151,7 +203,7 @@ def run_single_sample(target_dir):
     y = random.randint(0, max(1, h - roi_h))
     box = (x, y, roi_w, roi_h)
     roi_list = prepare_roi_for_ocr(img, box)
-    char, conf = ocr_char_and_conf(roi_list)
+    char, conf = ocr_char_and_conf(roi_list, whitelist)
 
     gray = cv2.cvtColor(img[y:y+roi_h, x:x+roi_w], cv2.COLOR_BGR2GRAY)
     blank_flag = is_grid_blank_dynamically(gray)
@@ -162,7 +214,6 @@ def run_single_sample(target_dir):
     print(f"OCR 辨識: '{char}' | 信心度: {conf:.1f}% | 空白格: {blank_flag}")
     print(f"筆畫統計: 持久度={persis:.3f}, 墨跡率={union_ratio:.3f}, 邊緣密度={edge_density:.3f}, CC數={n_cc}")
 
-    # 顯示紅框與結果
     cv2.rectangle(img, (x, y), (x + roi_w, y + roi_h), (0, 0, 255), 4)
     cv2.putText(img, f"{char} ({conf:.1f}%)", (x, y - 10),
                 cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 0, 0), 3)
@@ -172,7 +223,7 @@ def run_single_sample(target_dir):
     plt.show()
 
 
-def run_batch_sample(target_dir, sample_count):
+def run_batch_sample(target_dir, sample_count, whitelist=None):
     """隨機抽樣多張圖，統計平均信心度與空白率"""
     pngs = [f for f in os.listdir(target_dir) if f.lower().endswith('.png')]
     if not pngs:
@@ -191,7 +242,7 @@ def run_batch_sample(target_dir, sample_count):
         x = random.randint(0, max(1, w - roi_w))
         y = random.randint(0, max(1, h - roi_h))
         roi_list = prepare_roi_for_ocr(img, (x, y, roi_w, roi_h))
-        char, conf = ocr_char_and_conf(roi_list)
+        char, conf = ocr_char_and_conf(roi_list, whitelist)
         gray = cv2.cvtColor(img[y:y+roi_h, x:x+roi_w], cv2.COLOR_BGR2GRAY)
         if is_grid_blank_dynamically(gray):
             blank_cnt += 1
@@ -214,8 +265,8 @@ def run_batch_sample(target_dir, sample_count):
 # ================================================================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="OCR 單圖 / 批次測試模式")
-    parser.add_argument("--sample", type=int, default=1,
-                        help="指定抽樣張數 (預設=1，即單張模式)")
+    parser.add_argument("--sample", type=int, default=1, help="抽樣張數 (預設=1)")
+    parser.add_argument("--whitelist", type=str, default="", help="白名單字元（可選）")
     args = parser.parse_args()
 
     target_dir = os.path.join(DATA_DIR, TARGET_NAME)
@@ -223,7 +274,8 @@ if __name__ == "__main__":
         print(f"❌ 找不到資料夾 {target_dir}")
         exit(1)
 
+    wl = args.whitelist if args.whitelist else None
     if args.sample <= 1:
-        run_single_sample(target_dir)
+        run_single_sample(target_dir, wl)
     else:
-        run_batch_sample(target_dir, args.sample)
+        run_batch_sample(target_dir, args.sample, wl)

@@ -1,16 +1,20 @@
 ﻿# ================================================================
-# whitelist.py — 白名單與智慧推斷模組
+# whitelist.py — 白名單與智慧推斷模組（容錯 + 智慧補全版）
 # ================================================================
 
 import unicodedata
 import numpy as np
+import re
 
 class WhitelistManager:
     """
     處理 OCR 標籤結果的智慧推斷模組：
       - 支援白名單匹配、全域錨點、模式記憶。
-      - 適用於手寫字練習簿標籤列推斷。
+      - 支援任意格式（換行 / 空白 / 連寫）。
+      - 自動補齊九的倍數長度，使用內部佔位符「□」代替饕餮。
     """
+
+    PLACEHOLDER = "□"  # 專用佔位符，不會干擾 OCR 或實際字序
 
     def __init__(self, whitelist_path):
         self.text = ""
@@ -21,13 +25,33 @@ class WhitelistManager:
         self._load(whitelist_path)
 
     # ------------------------------------------------
-    # 載入白名單檔案
+    # 載入白名單檔案（智慧格式辨識 + 自動補全）
     # ------------------------------------------------
     def _load(self, path):
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                self.text = "".join(f.read().split())
-                print(f"✔ 成功載入白名單，共 {len(self.text)} 個字元。")
+            with open(path, "r", encoding="utf-8") as f:
+                raw = f.read()
+
+            # 1️⃣ 正規化（統一全形半形）
+            cleaned = unicodedata.normalize("NFKC", raw)
+
+            # 2️⃣ 將換行、空白、Tab都視為分隔符號
+            # 若使用者沒加空格（直接連寫） → split 後仍會得到一個整段
+            parts = re.split(r"[\s]+", cleaned)
+            # 若全無分隔符，則逐字展開（連寫模式）
+            if len(parts) == 1 and len(parts[0]) > 1:
+                chars = list(parts[0])
+            else:
+                chars = [c for c in "".join(parts) if c.strip()]
+
+            # 3️⃣ 自動補九的倍數長度，使用 PLACEHOLDER 補足
+            if len(chars) % 9 != 0:
+                remainder = 9 - (len(chars) % 9)
+                chars.extend([self.PLACEHOLDER] * remainder)
+
+            self.text = "".join(chars)
+            print(f"✔ 成功載入白名單，共 {len(self.text)} 個字元（已補齊對齊長度）。")
+
         except FileNotFoundError:
             print(f"❌ 找不到白名單檔案 '{path}'，已停用白名單功能。")
             self.text = ""
@@ -45,9 +69,7 @@ class WhitelistManager:
         return True
 
     def set_anchor(self, first_char):
-        """
-        設定全域錨點字元，用於跨頁序列推斷。
-        """
+        """設定全域錨點字元，用於跨頁序列推斷。"""
         if not self.text:
             print("⚠ 尚未載入白名單。")
             return
@@ -65,16 +87,10 @@ class WhitelistManager:
     # 主推斷函式
     # ------------------------------------------------
     def resolve_labels(self, ocr_results, page_idx=0, global_offset=None):
-        """
-        根據 OCR 結果與既有模式記憶推斷最終標籤列。
-        輸入: ocr_results = [ '我', '?', '天', ... ]
-        回傳: final_labels = [ '我', '是', '天', ... ]
-        """
         if not self.enabled or not self.text:
             return [c if c else '?' for c in ocr_results]
 
         final_labels = ["?"] * len(ocr_results)
-        is_determined = False
 
         # --- 層級 1：使用者指定的全域錨點 ---
         if page_idx == 0 and global_offset is not None:
@@ -108,7 +124,7 @@ class WhitelistManager:
         return final_labels
 
     # ------------------------------------------------
-    # 內部函式：根據單點錨或序列偏移推斷
+    # 內部：根據錨點與偏移推斷
     # ------------------------------------------------
     def _infer_from_anchors(self, ocr_results):
         anchors = []
@@ -123,7 +139,6 @@ class WhitelistManager:
         if not anchors:
             return [c if c else '?' for c in ocr_results]
 
-        # 嘗試序列配對 (滑動視窗匹配)
         MIN_MATCH_COUNT = 3
         best_score, best_offset = -1, None
         for offset in range(len(self.text) - len(ocr_results) + 1):
@@ -137,7 +152,6 @@ class WhitelistManager:
         if best_score >= MIN_MATCH_COUNT:
             return self._apply_offset(best_offset, len(ocr_results))
 
-        # 否則採用中位數偏移校正
         offsets = [a['idx'] - a['pos'] for a in anchors]
         if offsets:
             median_offset = int(np.median(offsets))
@@ -146,7 +160,7 @@ class WhitelistManager:
         return [c if c else '?' for c in ocr_results]
 
     # ------------------------------------------------
-    # 套用偏移量生成標籤序列
+    # 偏移套用
     # ------------------------------------------------
     def _apply_offset(self, offset, length):
         labels = ["?"] * length
