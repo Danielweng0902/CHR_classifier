@@ -37,10 +37,10 @@ DEFAULT_PARAMS = {
 }
 
 BO_BOUNDS = {
-    "min_area": (25000, 70000),
-    "max_area": (60000, 90000),
-    "min_ratio": (0.7, 0.95),
-    "max_ratio": (1.05, 1.3),
+    "min_area": (45000, 70000),
+    "max_area": (50000, 80000),
+    "min_ratio": (0.80, 1.00),
+    "max_ratio": (1.00, 1.30),
     "cluster_thresh": (20, 60),
 }
 
