@@ -36,29 +36,30 @@ import pytesseract
 import numpy as np
 from pdf2image import convert_from_path
 import shutil
-import math
+from config import DATA_DIR, TARGET_NAME
 
-# --- 1. 環境設定與路徑定義 ---
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# ------------------------------------------------
+# 全域設定
+# ------------------------------------------------
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 POPPLER_PATH = r"C:\poppler\poppler-25.07.0\Library\bin"
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
-PDF_FILE = os.path.join(script_dir, "pdf", "cramschool_merged.pdf")
-PAGES_DIR = os.path.join(script_dir, "data", "cramschool_merged")
-DEBUG_DIR = os.path.join(script_dir, "debug_steps")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PDF_FILE = os.path.join(SCRIPT_DIR, "pdf", f"{TARGET_NAME}.pdf")
+PAGES_DIR = os.path.join(DATA_DIR, TARGET_NAME)
+DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug_steps", TARGET_NAME)
 
-# ========================= 專家加權投票校正系統 (修正版) =========================
-
+# ================================================================
+# 保守方向校正 (v5 串聯法)
+# ================================================================
 def correct_orientation(image):
-    """保守版 v5: 串聯判斷，順序=標籤列→OCR→空白率→OSD"""
-    print("    -> 執行保守版 v5 串聯判斷進行方向校正...")
-
-    rotated_180_image = cv2.flip(image, -1)
+    print("    -> 執行方向校正 (標籤列→OCR→空白率→OSD)...")
+    rotated_180 = cv2.flip(image, -1)
     h, w = image.shape[:2]
-    small_image = cv2.resize(image, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
-    small_rotated_180 = cv2.flip(small_image, -1)
+    small = cv2.resize(image, None, fx=0.5, fy=0.5)
+    small_rot = cv2.flip(small, -1)
 
-    def avg_confidence(img):
+    def avg_conf(img):
         data = pytesseract.image_to_data(
             img, lang='chi_tra', config='--psm 6',
             output_type=pytesseract.Output.DICT
@@ -67,108 +68,108 @@ def correct_orientation(image):
         return np.mean(confs) if confs else 0.0
 
     try:
-        # --- Step 1: 標籤列 vs 底部列 ---
-        row_height = h // 15  # 取大約 1/15 高度
-        top_row = image[:row_height, :]
-        bottom_row = image[-row_height:, :]
-        top_conf = avg_confidence(top_row)
-        bottom_conf = avg_confidence(bottom_row)
-        print(f"      [標籤列檢查] 上行={top_conf:.2f}, 下行={bottom_conf:.2f}")
-
-        if top_conf >= bottom_conf:
-            print("        -> 標籤列較清楚，保持原樣。")
+        # Step 1: 標籤列比對
+        row_h = h // 15
+        top, bottom = image[:row_h, :], image[-row_h:, :]
+        top_conf, bot_conf = avg_conf(top), avg_conf(bottom)
+        print(f"      [標籤列] 上={top_conf:.2f}, 下={bot_conf:.2f}")
+        if top_conf >= bot_conf:
             return image, 0
-        print("        -> 底部更清楚，進入下一步驗證...")
+        print("        -> 底部較清楚，繼續檢查...")
 
-        # --- Step 2: OCR 信心度驗證 ---
-        conf_normal = avg_confidence(small_image)
-        conf_rotated = avg_confidence(small_rotated_180)
-        print(f"      [OCR] 正常={conf_normal:.2f}, 旋轉後={conf_rotated:.2f}")
-
-        if conf_rotated <= conf_normal:
-            print("        -> OCR 驗證未提升，保持原樣。")
+        # Step 2: OCR 全圖驗證
+        conf_norm, conf_rot = avg_conf(small), avg_conf(small_rot)
+        print(f"      [OCR] 正常={conf_norm:.2f}, 旋轉={conf_rot:.2f}")
+        if conf_rot <= conf_norm:
             return image, 0
-        print("        -> OCR 驗證通過，進入空白率檢查...")
+        print("        -> OCR 檢查支持旋轉，進入空白率分析...")
 
-        # --- Step 3: 空白率檢查 (上下 1/4) ---
+        # Step 3: 空白率檢查
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        _, binary = cv2.threshold(gray, 220, 255, cv2.THRESH_BINARY)
-        top_quarter = binary[:h//4, :]
-        bottom_quarter = binary[3*h//4:, :]
-        top_blank_ratio = cv2.countNonZero(top_quarter) / top_quarter.size
-        bottom_blank_ratio = cv2.countNonZero(bottom_quarter) / bottom_quarter.size
-        print(f"      [空白率] 上={top_blank_ratio:.2f}, 下={bottom_blank_ratio:.2f}")
-
-        if not (bottom_blank_ratio < top_blank_ratio):
-            print("        -> 空白率檢查不支持旋轉，保持原樣。")
+        _, bin_img = cv2.threshold(gray, 220, 255, cv2.THRESH_BINARY)
+        top_blank = cv2.countNonZero(bin_img[:h//4, :]) / bin_img[:h//4, :].size
+        bot_blank = cv2.countNonZero(bin_img[3*h//4:, :]) / bin_img[3*h//4:, :].size
+        print(f"      [空白率] 上={top_blank:.2f}, 下={bot_blank:.2f}")
+        if not (bot_blank < top_blank):
             return image, 0
-        print("        -> 空白率檢查通過，進入 OSD 最終確認...")
 
-        # --- Step 4: OSD 最終確認 ---
+        # Step 4: OSD 驗證
         osd = pytesseract.image_to_osd(image, output_type=pytesseract.Output.DICT)
-        rotation = osd.get('rotate', 0)
-        confidence = osd.get('confidence', 0.0)
-        print(f"      [OSD] rotation={rotation}, confidence={confidence:.2f}")
-
-        if confidence < 40.0:
-            print("        -> OSD 信心不足，保持原樣。")
-            return image, 0
-        if rotation == 180:
-            print("        -> OSD 確認為 180°，執行旋轉。")
-            return rotated_180_image, 180
-        else:
-            print("        -> OSD 不支持旋轉，保持原樣。")
-            return image, 0
+        rotation, conf = osd.get("rotate", 0), osd.get("confidence", 0)
+        print(f"      [OSD] rotation={rotation}, conf={conf:.1f}")
+        if conf >= 40 and rotation == 180:
+            print("        -> OSD 確認為倒置，旋轉 180°。")
+            return rotated_180, 180
+        return image, 0
 
     except Exception as e:
-        print(f"    -> 校正發生錯誤: {e}, 將回傳原始圖片。")
+        print(f"    -> 校正錯誤: {e}，回傳原圖。")
         return image, 0
 
 
-
-
 def correct_skew(image):
-    """(功能已移除)"""
-    print("    -> 傾斜校正已移除，跳過此步驟。")
+    """保留介面 (已停用)"""
     return image
 
-# --- 主執行流程 ---
+# ================================================================
+# 主流程：PDF → PNG
+# ================================================================
 def run_preprocessing():
-    # ... (主流程不變) ...
+    print(f"\n📘 [Preprocess] 處理目標: {TARGET_NAME}")
+    print(f"🔍 尋找 PDF: {PDF_FILE}")
+
+    if not os.path.exists(PDF_FILE):
+        print(f"❌ 找不到 PDF 檔案: {PDF_FILE}")
+        return
+
     os.makedirs(PAGES_DIR, exist_ok=True)
     os.makedirs(DEBUG_DIR, exist_ok=True)
-    print("✔ 環境與資料夾設定完成。")
+    print(f"✔ 建立輸出資料夾: {PAGES_DIR}")
+    print(f"✔ 建立 debug 資料夾: {DEBUG_DIR}")
+
+    # 若已有舊檔案則清空
     if os.listdir(PAGES_DIR) or os.listdir(DEBUG_DIR):
-        print(f"清空舊的 '{os.path.basename(PAGES_DIR)}' 和 '{os.path.basename(DEBUG_DIR)}' 資料夾...")
-        if os.path.isdir(PAGES_DIR): shutil.rmtree(PAGES_DIR)
-        if os.path.isdir(DEBUG_DIR): shutil.rmtree(DEBUG_DIR)
-        os.makedirs(PAGES_DIR, exist_ok=True)
-        os.makedirs(DEBUG_DIR, exist_ok=True)
+        print("🧹 清空舊的輸出資料夾...")
+        shutil.rmtree(PAGES_DIR)
+        shutil.rmtree(DEBUG_DIR)
+        os.makedirs(PAGES_DIR)
+        os.makedirs(DEBUG_DIR)
+
     try:
-        pages_in_memory = convert_from_path(pdf_path=PDF_FILE, dpi=300, poppler_path=POPPLER_PATH)
-        print(f"  -> 成功讀取 {len(pages_in_memory)} 頁。")
-        print("  -> 開始逐頁校正並儲存為 PNG...")
-        for i, page_image_pil in enumerate(pages_in_memory):
+        pages = convert_from_path(PDF_FILE, dpi=300, poppler_path=POPPLER_PATH)
+        print(f"  -> 成功載入 {len(pages)} 頁。")
+        print("  -> 開始方向校正與輸出 PNG...")
+
+        for i, page_pil in enumerate(pages):
             page_num = i + 1
             print(f"\n  -- 處理第 {page_num} 頁 --")
-            image_raw = cv2.cvtColor(np.array(page_image_pil), cv2.COLOR_RGB2BGR)
-            image_oriented, rotation_angle = correct_orientation(image_raw)
-            image_final = correct_skew(image_oriented)
-            annotated = image_final.copy()
-            cv2.putText(annotated, f"Rotation: {rotation_angle} deg", (50, 150),
-                        cv2.FONT_HERSHEY_SIMPLEX, 5, (0,0,255), 10, cv2.LINE_AA)
-            cv2.imwrite(os.path.join(DEBUG_DIR, f'page_{page_num:03d}_annotated.png'), annotated)
-            final_output_path = os.path.join(PAGES_DIR, f'page_{page_num:03d}.png')
-            is_success, buffer = cv2.imencode('.png', image_final)
-            if is_success:
-                with open(final_output_path, 'wb') as f:
-                    f.write(buffer)
-            print(f"    -> 已儲存校正後的圖片: {os.path.basename(final_output_path)}")
-    except FileNotFoundError:
-        print(f"  -> ❌ 錯誤：找不到 PDF 檔案 '{PDF_FILE}'。")
-    except Exception as e:
-        print(f"  -> ❌ 錯誤：PDF 預處理失敗: {e}")
-    print("\n✔ 所有頁面預處理完成！")
+            img = cv2.cvtColor(np.array(page_pil), cv2.COLOR_RGB2BGR)
+            oriented, rot_angle = correct_orientation(img)
+            final = correct_skew(oriented)
 
-if __name__ == '__main__':
+            # Debug 圖片
+            annotated = final.copy()
+            cv2.putText(annotated, f"Rotation: {rot_angle} deg", (50, 150),
+                        cv2.FONT_HERSHEY_SIMPLEX, 5, (0,0,255), 10, cv2.LINE_AA)
+            debug_out = os.path.join(DEBUG_DIR, f"page_{page_num:03d}_annotated.png")
+            cv2.imwrite(debug_out, annotated)
+
+            # 儲存最終 PNG
+            final_path = os.path.join(PAGES_DIR, f"page_{page_num:03d}.png")
+            is_ok, buffer = cv2.imencode(".png", final)
+            if is_ok:
+                with open(final_path, "wb") as f:
+                    f.write(buffer)
+            print(f"    -> 已輸出 {os.path.basename(final_path)}")
+
+    except Exception as e:
+        print(f"❌ PDF 預處理失敗: {e}")
+        return
+
+    print(f"\n✅ 預處理完成，輸出至 {PAGES_DIR}")
+
+# ================================================================
+# 直接執行模式
+# ================================================================
+if __name__ == "__main__":
     run_preprocessing()

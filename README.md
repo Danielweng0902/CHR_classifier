@@ -34,15 +34,23 @@ If you want to use this project, please prepare your **own scanned worksheets or
 
 CHR_classifier
 
-├── CHR_classifier.py # Main OCR pipeline
+├── main.py # main code
 
-├── debug_grid.py # Grid detection debugger
+├── config.py # all the config
+
+├── whitelist.py # whitelist process
+
+├── whitelist.txt # Character whitelist
 
 ├── pdf2png.py # Convert PDF to PNG if needed
 
 ├── preprocess_pages.py # Page preprocessing utility
 
-├── whitelist.txt # Character whitelist
+├── detect_grid.py # Grid detection debugger
+
+├── ocr.py # Optical Character Recognition and preprocess to Chinese words 
+
+├── report.py # output statistics
 
 ├── data/ # folder originally put each page as .png file
 
@@ -54,10 +62,19 @@ CHR_classifier
 ---
 
 ## 🔧 Requirements
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
 - Python 3.8+
-- [opencv-python>=4.5.0](https://opencv.org/)
 - numpy>=1.21.0
+- [opencv-python>=4.5.0](https://opencv.org/)
+- pdf2image>=1.16.3
+- Pillow>=9.0.0
+- bayesian-optimization
 - [pytesseract>=0.3.10](https://github.com/madmaze/pytesseract)
+
   
   ⚠️ **Important**: Must have **Tesseract OCR installed locally** and set the correct path in your code, e.g.:  
   ```python
@@ -73,7 +90,7 @@ CHR_classifier
 2. Prepare scanned PDF file inside "pdf" folder or PNG pages inside "data/{pdf/pages name}/".
 
   ( ⚠️the original dataset is not publicly available. Prepare your **own scanned worksheets or documents** as input. )
-  
+
 3. Enter the project directory
    ```bash
    cd CHR_classifier
@@ -83,7 +100,15 @@ CHR_classifier
    python CHR_classifier.py
    ```
 5. Results (cropped handwriting images and debug visualizations) will be saved to:
+
     ex.
+
+    ```
+    ./CHR_classifier/{output_folder}/
+
+    ```
+
+    
     ```
     ./CHR_classifier/250928/
     ```
