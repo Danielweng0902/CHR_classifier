@@ -97,7 +97,7 @@ CHR_classifier
    ```
 4. Run the classifier by the command below:
    ```bash
-   python CHR_classifier.py
+   python main.py
    ```
 5. Results (cropped handwriting images and debug visualizations) will be saved to:
 
