@@ -154,21 +154,53 @@ def _stroke_stats(gray):
     return edge_density, n_cc, max_cc_area_ratio
 
 
+def dynamic_threshold_params(gray_page):
+    """根據頁面亮度動態調整空白偵測參數"""
+    mean_val = np.mean(gray_page)
+    std_val = np.std(gray_page)
+
+    # --- 預設基準 ---
+    params = {
+        "std_thresh": 18,
+        "union_ink_ratio_min": 0.010,
+        "persistence_min": 0.50,
+        "edge_density_min": 0.006,
+        "n_cc_min": 1,
+        "max_cc_area_ratio_min": 0.003
+    }
+
+    # --- 亮頁面：放寬判定 ---
+    if mean_val > 180:  # 背景偏亮 → 放寬
+        params["union_ink_ratio_min"] *= 0.6
+        params["persistence_min"] *= 0.7
+        params["edge_density_min"] *= 0.7
+    # --- 暗頁面：收緊判定 ---
+    elif mean_val < 100:
+        params["union_ink_ratio_min"] *= 1.2
+        params["persistence_min"] *= 1.2
+        params["edge_density_min"] *= 1.2
+
+    # --- 對比度太低：降低 std 閾值 ---
+    if std_val < 30:
+        params["std_thresh"] = max(12, std_val * 0.7)
+
+    return params
+
+
 # ------------------------------------------------
 # 空白偵測（放寬版）
 # ------------------------------------------------
-def is_grid_blank_dynamically(gray,
-                              std_thresh=18,                # 原25 → 放寬
-                              union_ink_ratio_min=0.010,    # 原0.02 → 放寬
-                              persistence_min=0.50,          # 原0.6 → 放寬
-                              edge_density_min=0.006,        # 原0.01 → 放寬
-                              n_cc_min=1,
-                              max_cc_area_ratio_min=0.003):  # 原0.004 → 放寬
-    """
-    動態空白偵測（放寬版）：
-      - 降低筆畫密度門檻，避免淡字被當空白。
-      - 仍保留多特徵組合。
-    """
+def is_grid_blank_dynamically(gray, page_stats=None, **kwargs):
+    if page_stats is not None:
+        kwargs = dynamic_threshold_params(page_stats)
+
+    std_thresh = kwargs.get("std_thresh", 18)
+    union_ink_ratio_min = kwargs.get("union_ink_ratio_min", 0.010)
+    persistence_min = kwargs.get("persistence_min", 0.50)
+    edge_density_min = kwargs.get("edge_density_min", 0.006)
+    n_cc_min = kwargs.get("n_cc_min", 1)
+    max_cc_area_ratio_min = kwargs.get("max_cc_area_ratio_min", 0.003)
+
     if gray is None or gray.size == 0:
         return True
     if np.std(gray) < std_thresh:
@@ -182,6 +214,7 @@ def is_grid_blank_dynamically(gray,
         max_cc_area_ratio < max_cc_area_ratio_min):
         return True
     return False
+
 
 
 # ================================================================
